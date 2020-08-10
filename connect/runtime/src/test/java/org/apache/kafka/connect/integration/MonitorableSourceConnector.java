@@ -17,8 +17,10 @@
 package org.apache.kafka.connect.integration;
 
 import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.header.ConnectHeaders;
 import org.apache.kafka.connect.runtime.TestSourceConnector;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
@@ -44,6 +46,7 @@ import java.util.stream.LongStream;
 public class MonitorableSourceConnector extends TestSourceConnector {
     private static final Logger log = LoggerFactory.getLogger(MonitorableSourceConnector.class);
 
+    public static final String TOPIC_CONFIG = "topic";
     private String connectorName;
     private ConnectorHandle connectorHandle;
     private Map<String, String> commonConfigs;
@@ -54,6 +57,7 @@ public class MonitorableSourceConnector extends TestSourceConnector {
         connectorName = connectorHandle.name();
         commonConfigs = props;
         log.info("Started {} connector {}", this.getClass().getSimpleName(), connectorName);
+        connectorHandle.recordConnectorStart();
     }
 
     @Override
@@ -76,6 +80,7 @@ public class MonitorableSourceConnector extends TestSourceConnector {
     @Override
     public void stop() {
         log.info("Stopped {} connector {}", this.getClass().getSimpleName(), connectorName);
+        connectorHandle.recordConnectorStop();
     }
 
     @Override
@@ -105,7 +110,7 @@ public class MonitorableSourceConnector extends TestSourceConnector {
         public void start(Map<String, String> props) {
             taskId = props.get("task.id");
             connectorName = props.get("connector.name");
-            topicName = props.getOrDefault("topic", "sequential-topic");
+            topicName = props.getOrDefault(TOPIC_CONFIG, "sequential-topic");
             throughput = Long.valueOf(props.getOrDefault("throughput", "-1"));
             batchSize = Integer.valueOf(props.getOrDefault("messages.per.poll", "1"));
             taskHandle = RuntimeHandles.get().connectorHandle(connectorName).taskHandle(taskId);
@@ -113,8 +118,9 @@ public class MonitorableSourceConnector extends TestSourceConnector {
                     context.offsetStorageReader().offset(Collections.singletonMap("task.id", taskId)))
                     .orElse(Collections.emptyMap());
             startingSeqno = Optional.ofNullable((Long) offset.get("saved")).orElse(0L);
-            log.info("Started {} task {}", this.getClass().getSimpleName(), taskId);
+            log.info("Started {} task {} with properties {}", this.getClass().getSimpleName(), taskId, props);
             throttler = new ThroughputThrottler(throughput, System.currentTimeMillis());
+            taskHandle.recordTaskStart();
         }
 
         @Override
@@ -133,7 +139,9 @@ public class MonitorableSourceConnector extends TestSourceConnector {
                                 Schema.STRING_SCHEMA,
                                 "key-" + taskId + "-" + seqno,
                                 Schema.STRING_SCHEMA,
-                                "value-" + taskId + "-" + seqno))
+                                "value-" + taskId + "-" + seqno,
+                                null,
+                                new ConnectHeaders().addLong("header-" + seqno, seqno)))
                         .collect(Collectors.toList());
             }
             return null;
@@ -146,7 +154,7 @@ public class MonitorableSourceConnector extends TestSourceConnector {
         }
 
         @Override
-        public void commitRecord(SourceRecord record) {
+        public void commitRecord(SourceRecord record, RecordMetadata metadata) {
             log.trace("Committing record: {}", record);
             taskHandle.commit();
         }
@@ -155,6 +163,7 @@ public class MonitorableSourceConnector extends TestSourceConnector {
         public void stop() {
             log.info("Stopped {} task {}", this.getClass().getSimpleName(), taskId);
             stopped = true;
+            taskHandle.recordTaskStop();
         }
     }
 }

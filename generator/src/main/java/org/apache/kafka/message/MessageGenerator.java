@@ -41,7 +41,7 @@ public final class MessageGenerator {
 
     static final String JAVA_SUFFIX = ".java";
 
-    static final String API_MESSAGE_FACTORY_JAVA = "ApiMessageFactory.java";
+    static final String API_MESSAGE_TYPE_JAVA = "ApiMessageType.java";
 
     static final String API_MESSAGE_CLASS = "org.apache.kafka.common.protocol.ApiMessage";
 
@@ -51,16 +51,25 @@ public final class MessageGenerator {
 
     static final String READABLE_CLASS = "org.apache.kafka.common.protocol.Readable";
 
+    static final String RECORDS_READABLE_CLASS = "org.apache.kafka.common.protocol.RecordsReadable";
+
     static final String WRITABLE_CLASS = "org.apache.kafka.common.protocol.Writable";
 
+    static final String RECORDS_WRITABLE_CLASS = "org.apache.kafka.common.protocol.RecordsWritable";
+
     static final String ARRAYS_CLASS = "java.util.Arrays";
+
+    static final String OBJECTS_CLASS = "java.util.Objects";
 
     static final String LIST_CLASS = "java.util.List";
 
     static final String ARRAYLIST_CLASS = "java.util.ArrayList";
 
-    static final String IMPLICIT_LINKED_HASH_MULTI_SET_CLASS =
-        "org.apache.kafka.common.utils.ImplicitLinkedHashMultiSet";
+    static final String IMPLICIT_LINKED_HASH_COLLECTION_CLASS =
+        "org.apache.kafka.common.utils.ImplicitLinkedHashCollection";
+
+    static final String IMPLICIT_LINKED_HASH_MULTI_COLLECTION_CLASS =
+        "org.apache.kafka.common.utils.ImplicitLinkedHashMultiCollection";
 
     static final String UNSUPPORTED_VERSION_EXCEPTION_CLASS =
         "org.apache.kafka.common.errors.UnsupportedVersionException";
@@ -75,9 +84,65 @@ public final class MessageGenerator {
 
     static final String ARRAYOF_CLASS = "org.apache.kafka.common.protocol.types.ArrayOf";
 
+    static final String COMPACT_ARRAYOF_CLASS = "org.apache.kafka.common.protocol.types.CompactArrayOf";
+
     static final String STRUCT_CLASS = "org.apache.kafka.common.protocol.types.Struct";
 
     static final String BYTES_CLASS = "org.apache.kafka.common.utils.Bytes";
+
+    static final String UUID_CLASS = "java.util.UUID";
+
+    static final String BASE_RECORDS_CLASS = "org.apache.kafka.common.record.BaseRecords";
+
+    static final String MEMORY_RECORDS_CLASS = "org.apache.kafka.common.record.MemoryRecords";
+
+    static final String REQUEST_SUFFIX = "Request";
+
+    static final String RESPONSE_SUFFIX = "Response";
+
+    static final String BYTE_UTILS_CLASS = "org.apache.kafka.common.utils.ByteUtils";
+
+    static final String STANDARD_CHARSETS = "java.nio.charset.StandardCharsets";
+
+    static final String TAGGED_FIELDS_SECTION_CLASS = "org.apache.kafka.common.protocol.types.Field.TaggedFieldsSection";
+
+    static final String OBJECT_SERIALIZATION_CACHE_CLASS = "org.apache.kafka.common.protocol.ObjectSerializationCache";
+
+    static final String RAW_TAGGED_FIELD_CLASS = "org.apache.kafka.common.protocol.types.RawTaggedField";
+
+    static final String RAW_TAGGED_FIELD_WRITER_CLASS = "org.apache.kafka.common.protocol.types.RawTaggedFieldWriter";
+
+    static final String TREE_MAP_CLASS = "java.util.TreeMap";
+
+    static final String BYTE_BUFFER_CLASS = "java.nio.ByteBuffer";
+
+    static final String NAVIGABLE_MAP_CLASS = "java.util.NavigableMap";
+
+    static final String MAP_ENTRY_CLASS = "java.util.Map.Entry";
+
+    static final String JSON_NODE_CLASS = "com.fasterxml.jackson.databind.JsonNode";
+
+    static final String OBJECT_NODE_CLASS = "com.fasterxml.jackson.databind.node.ObjectNode";
+
+    static final String JSON_NODE_FACTORY_CLASS = "com.fasterxml.jackson.databind.node.JsonNodeFactory";
+
+    static final String BOOLEAN_NODE_CLASS = "com.fasterxml.jackson.databind.node.BooleanNode";
+
+    static final String SHORT_NODE_CLASS = "com.fasterxml.jackson.databind.node.ShortNode";
+
+    static final String INT_NODE_CLASS = "com.fasterxml.jackson.databind.node.IntNode";
+
+    static final String LONG_NODE_CLASS = "com.fasterxml.jackson.databind.node.LongNode";
+
+    static final String TEXT_NODE_CLASS = "com.fasterxml.jackson.databind.node.TextNode";
+
+    static final String BINARY_NODE_CLASS = "com.fasterxml.jackson.databind.node.BinaryNode";
+
+    static final String NULL_NODE_CLASS = "com.fasterxml.jackson.databind.node.NullNode";
+
+    static final String ARRAY_NODE_CLASS = "com.fasterxml.jackson.databind.node.ArrayNode";
+
+    static final String DOUBLE_NODE_CLASS = "com.fasterxml.jackson.databind.node.DoubleNode";
 
     /**
      * The Jackson serializer we use for JSON objects.
@@ -92,10 +157,26 @@ public final class MessageGenerator {
         JSON_SERDE.setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
     }
 
-    public static void processDirectories(String outputDir, String inputDir) throws Exception {
+    private static TypeClassGenerator createTypeClassGenerator(String packageName,
+                                                               String type) {
+        switch (type) {
+            case "none":
+                return null;
+            case "ApiMessageTypeGenerator":
+                return new ApiMessageTypeGenerator(packageName);
+            default:
+                throw new RuntimeException("Unknown type class generator type '" + type + "'");
+        }
+    }
+
+    public static void processDirectories(String packageName,
+                                          String outputDir,
+                                          String inputDir,
+                                          String typeClassGeneratorType) throws Exception {
         Files.createDirectories(Paths.get(outputDir));
         int numProcessed = 0;
-        ApiMessageFactoryGenerator messageFactoryGenerator = new ApiMessageFactoryGenerator();
+        TypeClassGenerator typeClassGenerator =
+            createTypeClassGenerator(packageName, typeClassGeneratorType);
         HashSet<String> outputFileNames = new HashSet<>();
         try (DirectoryStream<Path> directoryStream = Files
                 .newDirectoryStream(Paths.get(inputDir), JSON_GLOB)) {
@@ -107,24 +188,26 @@ public final class MessageGenerator {
                     outputFileNames.add(javaName);
                     Path outputPath = Paths.get(outputDir, javaName);
                     try (BufferedWriter writer = Files.newBufferedWriter(outputPath)) {
-                        MessageDataGenerator generator = new MessageDataGenerator();
+                        MessageDataGenerator generator = new MessageDataGenerator(packageName);
                         generator.generate(spec);
                         generator.write(writer);
                     }
                     numProcessed++;
-                    messageFactoryGenerator.registerMessageType(spec);
+                    if (typeClassGenerator != null) {
+                        typeClassGenerator.registerMessageType(spec);
+                    }
                 } catch (Exception e) {
                     throw new RuntimeException("Exception while processing " + inputPath.toString(), e);
                 }
             }
         }
-        Path factoryOutputPath = Paths.get(outputDir, API_MESSAGE_FACTORY_JAVA);
-        outputFileNames.add(API_MESSAGE_FACTORY_JAVA);
-        try (BufferedWriter writer = Files.newBufferedWriter(factoryOutputPath)) {
-            messageFactoryGenerator.generate();
-            messageFactoryGenerator.write(writer);
+        if (typeClassGenerator != null) {
+            outputFileNames.add(typeClassGenerator.outputName());
+            Path factoryOutputPath = Paths.get(outputDir, typeClassGenerator.outputName());
+            try (BufferedWriter writer = Files.newBufferedWriter(factoryOutputPath)) {
+                typeClassGenerator.generateAndWrite(writer);
+            }
         }
-        numProcessed++;
         try (DirectoryStream<Path> directoryStream = Files.
                 newDirectoryStream(Paths.get(outputDir))) {
             for (Path outputPath : directoryStream) {
@@ -181,16 +264,37 @@ public final class MessageGenerator {
         return bld.toString();
     }
 
-    private final static String USAGE = "MessageGenerator: [output Java file] [input JSON file]";
+    static String stripSuffix(String str, String suffix) {
+        if (str.endsWith(suffix)) {
+            return str.substring(0, str.length() - suffix.length());
+        } else {
+            throw new RuntimeException("String " + str + " does not end with the " +
+                "expected suffix " + suffix);
+        }
+    }
+
+    /**
+     * Return the number of bytes needed to encode an integer in unsigned variable-length format.
+     */
+    static int sizeOfUnsignedVarint(int value) {
+        int bytes = 1;
+        while ((value & 0xffffff80) != 0L) {
+            bytes += 1;
+            value >>>= 7;
+        }
+        return bytes;
+    }
+
+    private final static String USAGE = "MessageGenerator: [output Java package] [output Java file] [input JSON file]";
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
             System.out.println(USAGE);
             System.exit(0);
-        } else if (args.length != 2) {
+        } else if (args.length != 4) {
             System.out.println(USAGE);
             System.exit(1);
         }
-        processDirectories(args[0], args[1]);
+        processDirectories(args[0], args[1], args[2], args[3]);
     }
 }

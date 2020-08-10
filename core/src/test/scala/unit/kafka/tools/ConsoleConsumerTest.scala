@@ -17,14 +17,15 @@
 
 package kafka.tools
 
-import java.io.PrintStream
+import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.file.Files
+import java.util.{HashMap, Map => JMap}
 
-import kafka.common.MessageFormatter
 import kafka.tools.ConsoleConsumer.ConsumerWrapper
 import kafka.utils.{Exit, TestUtils}
 import org.apache.kafka.clients.consumer.{ConsumerRecord, MockConsumer, OffsetResetStrategy}
-import org.apache.kafka.common.TopicPartition
+import org.apache.kafka.common.{MessageFormatter, TopicPartition}
+import org.apache.kafka.common.record.TimestampType
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.test.MockDeserializer
 import org.mockito.Mockito._
@@ -33,7 +34,7 @@ import ArgumentMatchers._
 import org.junit.Assert._
 import org.junit.{Before, Test}
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 class ConsoleConsumerTest {
 
@@ -43,7 +44,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldResetUnConsumedOffsetsBeforeExit() {
+  def shouldResetUnConsumedOffsetsBeforeExit(): Unit = {
     val topic = "test"
     val maxMessages: Int = 123
     val totalMessages: Int = 700
@@ -75,7 +76,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldLimitReadsToMaxMessageLimit() {
+  def shouldLimitReadsToMaxMessageLimit(): Unit = {
     val consumer = mock(classOf[ConsumerWrapper])
     val formatter = mock(classOf[MessageFormatter])
     val record = new ConsumerRecord("foo", 1, 1, Array[Byte](), Array[Byte]())
@@ -92,7 +93,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldStopWhenOutputCheckErrorFails() {
+  def shouldStopWhenOutputCheckErrorFails(): Unit = {
     val consumer = mock(classOf[ConsumerWrapper])
     val formatter = mock(classOf[MessageFormatter])
     val printStream = mock(classOf[PrintStream])
@@ -113,7 +114,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseValidConsumerValidConfig() {
+  def shouldParseValidConsumerValidConfig(): Unit = {
     //Given
     val args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -170,7 +171,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseValidSimpleConsumerValidConfigWithStringOffset() {
+  def shouldParseValidSimpleConsumerValidConfigWithStringOffset(): Unit = {
     //Given
     val args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -192,7 +193,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseValidConsumerConfigWithAutoOffsetResetLatest() {
+  def shouldParseValidConsumerConfigWithAutoOffsetResetLatest(): Unit = {
     //Given
     val args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -211,7 +212,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseValidConsumerConfigWithAutoOffsetResetEarliest() {
+  def shouldParseValidConsumerConfigWithAutoOffsetResetEarliest(): Unit = {
     //Given
     val args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -230,7 +231,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseValidConsumerConfigWithAutoOffsetResetAndMatchingFromBeginning() {
+  def shouldParseValidConsumerConfigWithAutoOffsetResetAndMatchingFromBeginning(): Unit = {
     //Given
     val args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -250,7 +251,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseValidConsumerConfigWithNoOffsetReset() {
+  def shouldParseValidConsumerConfigWithNoOffsetReset(): Unit = {
     //Given
     val args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -268,7 +269,7 @@ class ConsoleConsumerTest {
   }
 
   @Test(expected = classOf[IllegalArgumentException])
-  def shouldExitOnInvalidConfigWithAutoOffsetResetAndConflictingFromBeginning() {
+  def shouldExitOnInvalidConfigWithAutoOffsetResetAndConflictingFromBeginning(): Unit = {
     Exit.setExitProcedure((_, message) => throw new IllegalArgumentException(message.orNull))
 
     //Given
@@ -287,7 +288,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseConfigsFromFile() {
+  def shouldParseConfigsFromFile(): Unit = {
     val propsFile = TestUtils.tempFile()
     val propsStream = Files.newOutputStream(propsFile.toPath)
     propsStream.write("request.timeout.ms=1000\n".getBytes())
@@ -306,7 +307,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def groupIdsProvidedInDifferentPlacesMustMatch() {
+  def groupIdsProvidedInDifferentPlacesMustMatch(): Unit = {
     Exit.setExitProcedure((_, message) => throw new IllegalArgumentException(message.orNull))
 
     // different in all three places
@@ -433,7 +434,7 @@ class ConsoleConsumerTest {
   }
 
   @Test
-  def shouldParseGroupIdFromBeginningGivenTogether() {
+  def shouldParseGroupIdFromBeginningGivenTogether(): Unit = {
     // Start from earliest
     var args: Array[String] = Array(
       "--bootstrap-server", "localhost:9092",
@@ -462,7 +463,7 @@ class ConsoleConsumerTest {
   }
 
   @Test(expected = classOf[IllegalArgumentException])
-  def shouldExitOnGroupIdAndPartitionGivenTogether() {
+  def shouldExitOnGroupIdAndPartitionGivenTogether(): Unit = {
     Exit.setExitProcedure((_, message) => throw new IllegalArgumentException(message.orNull))
     //Given
     val args: Array[String] = Array(
@@ -480,7 +481,7 @@ class ConsoleConsumerTest {
   }
 
   @Test(expected = classOf[IllegalArgumentException])
-  def shouldExitOnOffsetWithoutPartition() {
+  def shouldExitOnOffsetWithoutPartition(): Unit = {
     Exit.setExitProcedure((_, message) => throw new IllegalArgumentException(message.orNull))
     //Given
     val args: Array[String] = Array(
@@ -495,4 +496,70 @@ class ConsoleConsumerTest {
       Exit.resetExitProcedure()
     }
   }
+
+  @Test
+  def testDefaultMessageFormatter(): Unit = {
+    val record = new ConsumerRecord("topic", 0, 123, "key".getBytes, "value".getBytes)
+    val formatter = new DefaultMessageFormatter()
+    val configs: JMap[String, String] = new HashMap()
+
+    formatter.configure(configs)
+    var out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("value\n", out.toString)
+
+    configs.put("print.key", "true")
+    formatter.configure(configs)
+    out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("key\tvalue\n", out.toString)
+
+    configs.put("print.partition", "true")
+    formatter.configure(configs)
+    out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("key\tvalue\t0\n", out.toString)
+
+    configs.put("print.timestamp", "true")
+    formatter.configure(configs)
+    out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("NO_TIMESTAMP\tkey\tvalue\t0\n", out.toString)
+
+    out = new ByteArrayOutputStream()
+    val record2 = new ConsumerRecord("topic", 0, 123, 123L, TimestampType.CREATE_TIME, 321L, -1, -1, "key".getBytes, "value".getBytes)
+    formatter.writeTo(record2, new PrintStream(out))
+    assertEquals("CreateTime:123\tkey\tvalue\t0\n", out.toString)
+    formatter.close()
+  }
+
+  @Test
+  def testNoOpMessageFormatter(): Unit = {
+    val record = new ConsumerRecord("topic", 0, 123, "key".getBytes, "value".getBytes)
+    val formatter = new NoOpMessageFormatter()
+
+    formatter.configure(new HashMap())
+    val out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("", out.toString)
+  }
+
+  @Test
+  def testChecksumMessageFormatter(): Unit = {
+    val record = new ConsumerRecord("topic", 0, 123, "key".getBytes, "value".getBytes)
+    val formatter = new ChecksumMessageFormatter()
+    val configs: JMap[String, String] = new HashMap()
+
+    formatter.configure(configs)
+    var out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("checksum:-1\n", out.toString)
+
+    configs.put("topic", "topic1")
+    formatter.configure(configs)
+    out = new ByteArrayOutputStream()
+    formatter.writeTo(record, new PrintStream(out))
+    assertEquals("topic1:checksum:-1\n", out.toString)
+  }
+
 }

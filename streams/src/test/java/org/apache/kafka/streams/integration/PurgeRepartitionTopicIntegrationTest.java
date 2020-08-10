@@ -16,13 +16,14 @@
  */
 package org.apache.kafka.streams.integration;
 
-import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.LogDirDescription;
+import org.apache.kafka.clients.admin.ReplicaInfo;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.config.TopicConfig;
-import org.apache.kafka.common.requests.DescribeLogDirsResponse;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Time;
@@ -60,7 +61,7 @@ public class PurgeRepartitionTopicIntegrationTest {
     private static final String APPLICATION_ID = "restore-test";
     private static final String REPARTITION_TOPIC = APPLICATION_ID + "-KSTREAM-AGGREGATE-STATE-STORE-0000000002-repartition";
 
-    private static AdminClient adminClient;
+    private static Admin adminClient;
     private static KafkaStreams kafkaStreams;
     private static final Integer PURGE_INTERVAL_MS = 10;
     private static final Integer PURGE_SEGMENT_BYTES = 2000;
@@ -120,13 +121,13 @@ public class PurgeRepartitionTopicIntegrationTest {
             time.sleep(PURGE_INTERVAL_MS);
 
             try {
-                final Collection<DescribeLogDirsResponse.LogDirInfo> logDirInfo =
-                    adminClient.describeLogDirs(Collections.singleton(0)).values().get(0).get().values();
+                final Collection<LogDirDescription> logDirInfo =
+                    adminClient.describeLogDirs(Collections.singleton(0)).descriptions().get(0).get().values();
 
-                for (final DescribeLogDirsResponse.LogDirInfo partitionInfo : logDirInfo) {
-                    final DescribeLogDirsResponse.ReplicaInfo replicaInfo =
-                        partitionInfo.replicaInfos.get(new TopicPartition(REPARTITION_TOPIC, 0));
-                    if (replicaInfo != null && verifier.verify(replicaInfo.size)) {
+                for (final LogDirDescription partitionInfo : logDirInfo) {
+                    final ReplicaInfo replicaInfo =
+                        partitionInfo.replicaInfos().get(new TopicPartition(REPARTITION_TOPIC, 0));
+                    if (replicaInfo != null && verifier.verify(replicaInfo.size())) {
                         return true;
                     }
                 }
@@ -148,7 +149,7 @@ public class PurgeRepartitionTopicIntegrationTest {
         // create admin client for verification
         final Properties adminConfig = new Properties();
         adminConfig.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, CLUSTER.bootstrapServers());
-        adminClient = AdminClient.create(adminConfig);
+        adminClient = Admin.create(adminConfig);
 
         final Properties streamsConfiguration = new Properties();
         streamsConfiguration.put(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
@@ -160,7 +161,6 @@ public class PurgeRepartitionTopicIntegrationTest {
         streamsConfiguration.put(StreamsConfig.topicPrefix(TopicConfig.SEGMENT_MS_CONFIG), PURGE_INTERVAL_MS);
         streamsConfiguration.put(StreamsConfig.topicPrefix(TopicConfig.SEGMENT_BYTES_CONFIG), PURGE_SEGMENT_BYTES);
         streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.BATCH_SIZE_CONFIG), PURGE_SEGMENT_BYTES / 2);    // we cannot allow batch size larger than segment size
-        streamsConfiguration.put(IntegrationTestUtils.INTERNAL_LEAVE_GROUP_ON_CLOSE, true);
 
         final StreamsBuilder builder = new StreamsBuilder();
         builder.stream(INPUT_TOPIC)

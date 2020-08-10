@@ -28,14 +28,13 @@ import org.apache.kafka.test.{IntegrationTest, TestUtils}
 import org.junit._
 import org.junit.experimental.categories.Category
 import org.junit.rules.TemporaryFolder
-import org.scalatest.junit.JUnitSuite
 
 /**
  * Test suite base that prepares Kafka cluster for stream-table joins in Kafka Streams
  * <p>
  */
 @Category(Array(classOf[IntegrationTest]))
-class StreamToTableJoinScalaIntegrationTestBase extends JUnitSuite with StreamToTableJoinTestData {
+class StreamToTableJoinScalaIntegrationTestBase extends StreamToTableJoinTestData {
 
   private val privateCluster: EmbeddedKafkaCluster = new EmbeddedKafkaCluster(1)
 
@@ -74,7 +73,6 @@ class StreamToTableJoinScalaIntegrationTestBase extends JUnitSuite with StreamTo
     val p = new Properties()
     p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers())
     p.put(ProducerConfig.ACKS_CONFIG, "all")
-    p.put(ProducerConfig.RETRIES_CONFIG, "0")
     p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, classOf[StringSerializer])
     p.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, classOf[StringSerializer])
     p
@@ -84,7 +82,6 @@ class StreamToTableJoinScalaIntegrationTestBase extends JUnitSuite with StreamTo
     val p = new Properties()
     p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers())
     p.put(ProducerConfig.ACKS_CONFIG, "all")
-    p.put(ProducerConfig.RETRIES_CONFIG, "0")
     p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, classOf[StringSerializer])
     p.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, classOf[LongSerializer])
     p
@@ -105,7 +102,7 @@ class StreamToTableJoinScalaIntegrationTestBase extends JUnitSuite with StreamTo
                       outputTopic: String,
                       waitTillRecordsReceived: Boolean = true): java.util.List[KeyValue[String, Long]] = {
 
-    import collection.JavaConverters._
+    import _root_.scala.jdk.CollectionConverters._
 
     // Publish user-region information.
     val userRegionsProducerConfig: Properties = getUserRegionsProducerConfig()

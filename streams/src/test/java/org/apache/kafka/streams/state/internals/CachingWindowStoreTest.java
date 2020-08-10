@@ -35,19 +35,23 @@ import org.apache.kafka.streams.kstream.internals.TimeWindow;
 import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.internals.MockStreamsMetrics;
 import org.apache.kafka.streams.processor.internals.ProcessorRecordContext;
+import org.apache.kafka.streams.processor.internals.testutil.LogCaptureAppender;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
 import org.apache.kafka.streams.state.WindowStore;
 import org.apache.kafka.streams.state.WindowStoreIterator;
-import org.apache.kafka.streams.test.ConsumerRecordFactory;
+import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.test.InternalMockProcessorContext;
 import org.apache.kafka.test.TestUtils;
+import org.easymock.EasyMock;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
@@ -61,11 +65,13 @@ import static org.apache.kafka.test.StreamsTestUtils.toList;
 import static org.apache.kafka.test.StreamsTestUtils.verifyKeyValueList;
 import static org.apache.kafka.test.StreamsTestUtils.verifyWindowedKeyValue;
 import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.hasItem;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class CachingWindowStoreTest {
@@ -74,31 +80,33 @@ public class CachingWindowStoreTest {
     private static final long DEFAULT_TIMESTAMP = 10L;
     private static final Long WINDOW_SIZE = 10L;
     private static final long SEGMENT_INTERVAL = 100L;
+    private final static String TOPIC = "topic";
+    private static final String CACHE_NAMESPACE = "0_0-store-name";
+
     private InternalMockProcessorContext context;
-    private RocksDBSegmentedBytesStore underlying;
+    private RocksDBSegmentedBytesStore bytesStore;
+    private WindowStore<Bytes, byte[]> underlyingStore;
     private CachingWindowStore cachingStore;
     private CachingKeyValueStoreTest.CacheFlushListenerStub<Windowed<String>, String> cacheListener;
     private ThreadCache cache;
-    private String topic;
     private WindowKeySchema keySchema;
 
     @Before
     public void setUp() {
         keySchema = new WindowKeySchema();
-        underlying = new RocksDBSegmentedBytesStore("test", "metrics-scope", 0, SEGMENT_INTERVAL, keySchema);
-        final RocksDBWindowStore windowStore = new RocksDBWindowStore(
-            underlying,
+        bytesStore = new RocksDBSegmentedBytesStore("test", "metrics-scope", 0, SEGMENT_INTERVAL, keySchema);
+        underlyingStore = new RocksDBWindowStore(
+            bytesStore,
             false,
             WINDOW_SIZE);
         final TimeWindowedDeserializer<String> keyDeserializer = new TimeWindowedDeserializer<>(new StringDeserializer(), WINDOW_SIZE);
         keyDeserializer.setIsChangelogTopic(true);
         cacheListener = new CachingKeyValueStoreTest.CacheFlushListenerStub<>(keyDeserializer, new StringDeserializer());
-        cachingStore = new CachingWindowStore(windowStore, WINDOW_SIZE, SEGMENT_INTERVAL);
+        cachingStore = new CachingWindowStore(underlyingStore, WINDOW_SIZE, SEGMENT_INTERVAL);
         cachingStore.setFlushListener(cacheListener, false);
         cache = new ThreadCache(new LogContext("testCache "), MAX_CACHE_SIZE_BYTES, new MockStreamsMetrics(new Metrics()));
-        topic = "topic";
         context = new InternalMockProcessorContext(TestUtils.tempDirectory(), null, null, null, cache);
-        context.setRecordContext(new ProcessorRecordContext(DEFAULT_TIMESTAMP, 0, 0, topic, null));
+        context.setRecordContext(new ProcessorRecordContext(DEFAULT_TIMESTAMP, 0, 0, TOPIC, null));
         cachingStore.init(context, cachingStore);
     }
 
@@ -119,15 +127,17 @@ public class CachingWindowStoreTest {
 
         builder.addStateStore(storeBuilder);
 
-        builder.stream(topic,
+        builder.stream(TOPIC,
             Consumed.with(Serdes.String(), Serdes.String()))
             .transform(() -> new Transformer<String, String, KeyValue<String, String>>() {
                 private WindowStore<String, String> store;
                 private int numRecordsProcessed;
+                private ProcessorContext context;
 
                 @SuppressWarnings("unchecked")
                 @Override
                 public void init(final ProcessorContext processorContext) {
+                    this.context = processorContext;
                     this.store = (WindowStore<String, String>) processorContext.getStateStore("store-name");
                     int count = 0;
 
@@ -151,7 +161,7 @@ public class CachingWindowStoreTest {
                     }
                     assertThat(count, equalTo(numRecordsProcessed));
 
-                    store.put(value, value);
+                    store.put(value, value, context.timestamp());
 
                     numRecordsProcessed++;
 
@@ -172,35 +182,37 @@ public class CachingWindowStoreTest {
         streamsConfiguration.put(StreamsConfig.STATE_DIR_CONFIG, TestUtils.tempDirectory().getPath());
         streamsConfiguration.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 10 * 1000);
 
-        final long initialWallClockTime = 0L;
+        final Instant initialWallClockTime = Instant.ofEpochMilli(0L);
         final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), streamsConfiguration, initialWallClockTime);
 
-        final ConsumerRecordFactory<String, String> recordFactory = new ConsumerRecordFactory<>(
+        final TestInputTopic<String, String> inputTopic = driver.createInputTopic(TOPIC,
             Serdes.String().serializer(),
             Serdes.String().serializer(),
-            initialWallClockTime);
+            initialWallClockTime,
+            Duration.ZERO);
 
         for (int i = 0; i < 5; i++) {
-            driver.pipeInput(recordFactory.create(topic, UUID.randomUUID().toString(), UUID.randomUUID().toString()));
+            inputTopic.pipeInput(UUID.randomUUID().toString(), UUID.randomUUID().toString());
         }
-        driver.advanceWallClockTime(10 * 1000L);
-        recordFactory.advanceTimeMs(10 * 1000L);
+        driver.advanceWallClockTime(Duration.ofSeconds(10));
+        inputTopic.advanceTime(Duration.ofSeconds(10));
         for (int i = 0; i < 5; i++) {
-            driver.pipeInput(recordFactory.create(topic, UUID.randomUUID().toString(), UUID.randomUUID().toString()));
+            inputTopic.pipeInput(UUID.randomUUID().toString(), UUID.randomUUID().toString());
         }
-        driver.advanceWallClockTime(10 * 1000L);
-        recordFactory.advanceTimeMs(10 * 1000L);
+        driver.advanceWallClockTime(Duration.ofSeconds(10));
+        inputTopic.advanceTime(Duration.ofSeconds(10));
         for (int i = 0; i < 5; i++) {
-            driver.pipeInput(recordFactory.create(topic, UUID.randomUUID().toString(), UUID.randomUUID().toString()));
+            inputTopic.pipeInput(UUID.randomUUID().toString(), UUID.randomUUID().toString());
         }
-        driver.advanceWallClockTime(10 * 1000L);
-        recordFactory.advanceTimeMs(10 * 1000L);
+        driver.advanceWallClockTime(Duration.ofSeconds(10));
+        inputTopic.advanceTime(Duration.ofSeconds(10));
         for (int i = 0; i < 5; i++) {
-            driver.pipeInput(recordFactory.create(topic, UUID.randomUUID().toString(), UUID.randomUUID().toString()));
+            inputTopic.pipeInput(UUID.randomUUID().toString(), UUID.randomUUID().toString());
         }
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldPutFetchFromCache() {
         cachingStore.put(bytesKey("a"), bytesValue("a"));
         cachingStore.put(bytesKey("b"), bytesValue("b"));
@@ -234,7 +246,12 @@ public class CachingWindowStoreTest {
         return Bytes.wrap(key.getBytes());
     }
 
+    private String stringFrom(final byte[] from) {
+        return Serdes.String().deserializer().deserialize("", from);
+    }
+
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldPutFetchRangeFromCache() {
         cachingStore.put(bytesKey("a"), bytesValue("a"));
         cachingStore.put(bytesKey("b"), bytesValue("b"));
@@ -254,6 +271,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldGetAllFromCache() {
         cachingStore.put(bytesKey("a"), bytesValue("a"));
         cachingStore.put(bytesKey("b"), bytesValue("b"));
@@ -276,6 +294,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldFetchAllWithinTimestampRange() {
         final String[] array = {"a", "b", "c", "d", "e", "f", "g", "h"};
         for (int i = 0; i < array.length; i++) {
@@ -321,7 +340,7 @@ public class CachingWindowStoreTest {
     public void shouldFlushEvictedItemsIntoUnderlyingStore() {
         final int added = addItemsToCache();
         // all dirty entries should have been flushed
-        final KeyValueIterator<Bytes, byte[]> iter = underlying.fetch(
+        final KeyValueIterator<Bytes, byte[]> iter = bytesStore.fetch(
             Bytes.wrap("0".getBytes(StandardCharsets.UTF_8)),
             DEFAULT_TIMESTAMP,
             DEFAULT_TIMESTAMP);
@@ -333,6 +352,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldForwardDirtyItemsWhenFlushCalled() {
         final Windowed<String> windowedKey =
             new Windowed<>("1", new TimeWindow(DEFAULT_TIMESTAMP, DEFAULT_TIMESTAMP + WINDOW_SIZE));
@@ -349,6 +369,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldForwardOldValuesWhenEnabled() {
         cachingStore.setFlushListener(cacheListener, true);
         final Windowed<String> windowedKey =
@@ -377,6 +398,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldForwardOldValuesWhenDisabled() {
         final Windowed<String> windowedKey =
             new Windowed<>("1", new TimeWindow(DEFAULT_TIMESTAMP, DEFAULT_TIMESTAMP + WINDOW_SIZE));
@@ -435,7 +457,7 @@ public class CachingWindowStoreTest {
     @Test
     public void shouldIterateCacheAndStore() {
         final Bytes key = Bytes.wrap("1".getBytes());
-        underlying.put(WindowKeySchema.toStoreKeyBinary(key, DEFAULT_TIMESTAMP, 0), "a".getBytes());
+        bytesStore.put(WindowKeySchema.toStoreKeyBinary(key, DEFAULT_TIMESTAMP, 0), "a".getBytes());
         cachingStore.put(key, bytesValue("b"), DEFAULT_TIMESTAMP + WINDOW_SIZE);
         final WindowStoreIterator<byte[]> fetch =
             cachingStore.fetch(bytesKey("1"), ofEpochMilli(DEFAULT_TIMESTAMP), ofEpochMilli(DEFAULT_TIMESTAMP + WINDOW_SIZE));
@@ -447,7 +469,7 @@ public class CachingWindowStoreTest {
     @Test
     public void shouldIterateCacheAndStoreKeyRange() {
         final Bytes key = Bytes.wrap("1".getBytes());
-        underlying.put(WindowKeySchema.toStoreKeyBinary(key, DEFAULT_TIMESTAMP, 0), "a".getBytes());
+        bytesStore.put(WindowKeySchema.toStoreKeyBinary(key, DEFAULT_TIMESTAMP, 0), "a".getBytes());
         cachingStore.put(key, bytesValue("b"), DEFAULT_TIMESTAMP + WINDOW_SIZE);
 
         final KeyValueIterator<Windowed<Bytes>, byte[]> fetchRange =
@@ -464,6 +486,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldClearNamespaceCacheOnClose() {
         cachingStore.put(bytesKey("a"), bytesValue("a"));
         assertEquals(1, cache.size());
@@ -484,6 +507,7 @@ public class CachingWindowStoreTest {
     }
 
     @Test(expected = InvalidStateStoreException.class)
+    @SuppressWarnings("deprecation")
     public void shouldThrowIfTryingToWriteToClosedCachingStore() {
         cachingStore.close();
         cachingStore.put(bytesKey("a"), bytesValue("a"));
@@ -543,12 +567,30 @@ public class CachingWindowStoreTest {
         );
     }
 
+    @Test
+    public void shouldReturnSameResultsForSingleKeyFetchAndEqualKeyRangeFetch() {
+        cachingStore.put(bytesKey("a"), bytesValue("0001"), 0);
+        cachingStore.put(bytesKey("aa"), bytesValue("0002"), 1);
+        cachingStore.put(bytesKey("aa"), bytesValue("0003"), 2);
+        cachingStore.put(bytesKey("aaa"), bytesValue("0004"), 3);
+
+        final WindowStoreIterator<byte[]> singleKeyIterator = cachingStore.fetch(bytesKey("aa"), 0L, 5L);
+        final KeyValueIterator<Windowed<Bytes>, byte[]> keyRangeIterator = cachingStore.fetch(bytesKey("aa"), bytesKey("aa"), 0L, 5L);
+
+        assertEquals(stringFrom(singleKeyIterator.next().value), stringFrom(keyRangeIterator.next().value));
+        assertEquals(stringFrom(singleKeyIterator.next().value), stringFrom(keyRangeIterator.next().value));
+        assertFalse(singleKeyIterator.hasNext());
+        assertFalse(keyRangeIterator.hasNext());
+    }
+
     @Test(expected = NullPointerException.class)
+    @SuppressWarnings("deprecation")
     public void shouldThrowNullPointerExceptionOnPutNullKey() {
         cachingStore.put(null, bytesValue("anyValue"));
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void shouldNotThrowNullPointerExceptionOnPutNullValue() {
         cachingStore.put(bytesKey("a"), null);
     }
@@ -568,19 +610,99 @@ public class CachingWindowStoreTest {
         cachingStore.fetch(bytesKey("anyFrom"), null, ofEpochMilli(1L), ofEpochMilli(2L));
     }
 
+    @Test
+    public void shouldNotThrowInvalidRangeExceptionWithNegativeFromKey() {
+        final Bytes keyFrom = Bytes.wrap(Serdes.Integer().serializer().serialize("", -1));
+        final Bytes keyTo = Bytes.wrap(Serdes.Integer().serializer().serialize("", 1));
+
+        try (final LogCaptureAppender appender = LogCaptureAppender.createAndRegister(CachingWindowStore.class)) {
+            final KeyValueIterator<Windowed<Bytes>, byte[]> iterator = cachingStore.fetch(keyFrom, keyTo, 0L, 10L);
+            assertFalse(iterator.hasNext());
+
+            final List<String> messages = appender.getMessages();
+            assertThat(
+                messages,
+                hasItem("Returning empty iterator for fetch with invalid key range: from > to." +
+                    " This may be due to serdes that don't preserve ordering when lexicographically comparing the serialized bytes." +
+                    " Note that the built-in numerical serdes do not follow this for negative numbers")
+            );
+        }
+    }
+
+    @Test
+    public void shouldCloseCacheAndWrappedStoreAfterErrorDuringCacheFlush() {
+        setUpCloseTests();
+        EasyMock.reset(cache);
+        cache.flush(CACHE_NAMESPACE);
+        EasyMock.expectLastCall().andThrow(new RuntimeException("Simulating an error on flush"));
+        cache.close(CACHE_NAMESPACE);
+        EasyMock.replay(cache);
+        EasyMock.reset(underlyingStore);
+        underlyingStore.close();
+        EasyMock.replay(underlyingStore);
+
+        assertThrows(RuntimeException.class, cachingStore::close);
+        EasyMock.verify(cache, underlyingStore);
+    }
+
+    @Test
+    public void shouldCloseWrappedStoreAfterErrorDuringCacheClose() {
+        setUpCloseTests();
+        EasyMock.reset(cache);
+        cache.flush(CACHE_NAMESPACE);
+        cache.close(CACHE_NAMESPACE);
+        EasyMock.expectLastCall().andThrow(new RuntimeException("Simulating an error on close"));
+        EasyMock.replay(cache);
+        EasyMock.reset(underlyingStore);
+        underlyingStore.close();
+        EasyMock.replay(underlyingStore);
+
+        assertThrows(RuntimeException.class, cachingStore::close);
+        EasyMock.verify(cache, underlyingStore);
+    }
+
+    @Test
+    public void shouldCloseCacheAfterErrorDuringStateStoreClose() {
+        setUpCloseTests();
+        EasyMock.reset(cache);
+        cache.flush(CACHE_NAMESPACE);
+        cache.close(CACHE_NAMESPACE);
+        EasyMock.replay(cache);
+        EasyMock.reset(underlyingStore);
+        underlyingStore.close();
+        EasyMock.expectLastCall().andThrow(new RuntimeException("Simulating an error on close"));
+        EasyMock.replay(underlyingStore);
+
+        assertThrows(RuntimeException.class, cachingStore::close);
+        EasyMock.verify(cache, underlyingStore);
+    }
+
+    private void setUpCloseTests() {
+        underlyingStore = EasyMock.createNiceMock(WindowStore.class);
+        EasyMock.expect(underlyingStore.name()).andStubReturn("store-name");
+        EasyMock.expect(underlyingStore.isOpen()).andStubReturn(true);
+        EasyMock.replay(underlyingStore);
+        cachingStore = new CachingWindowStore(underlyingStore, WINDOW_SIZE, SEGMENT_INTERVAL);
+        cache = EasyMock.createNiceMock(ThreadCache.class);
+        context = new InternalMockProcessorContext(TestUtils.tempDirectory(), null, null, null, cache);
+        context.setRecordContext(new ProcessorRecordContext(10, 0, 0, TOPIC, null));
+        cachingStore.init(context, cachingStore);
+    }
+
     private static KeyValue<Windowed<Bytes>, byte[]> windowedPair(final String key, final String value, final long timestamp) {
         return KeyValue.pair(
             new Windowed<>(bytesKey(key), new TimeWindow(timestamp, timestamp + WINDOW_SIZE)),
             bytesValue(value));
     }
 
+    @SuppressWarnings("deprecation")
     private int addItemsToCache() {
         int cachedSize = 0;
         int i = 0;
         while (cachedSize < MAX_CACHE_SIZE_BYTES) {
             final String kv = String.valueOf(i++);
             cachingStore.put(bytesKey(kv), bytesValue(kv));
-            cachedSize += memoryCacheEntrySize(kv.getBytes(), kv.getBytes(), topic) +
+            cachedSize += memoryCacheEntrySize(kv.getBytes(), kv.getBytes(), TOPIC) +
                 8 + // timestamp
                 4; // sequenceNumber
         }

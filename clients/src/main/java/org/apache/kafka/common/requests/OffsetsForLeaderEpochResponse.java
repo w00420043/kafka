@@ -41,8 +41,8 @@ import static org.apache.kafka.common.protocol.CommonFields.TOPIC_NAME;
  * Possible error codes:
  *
  * - {@link Errors#TOPIC_AUTHORIZATION_FAILED} If the user does not have DESCRIBE access to a requested topic
- * - {@link Errors#REPLICA_NOT_AVAILABLE} If the request is received by a broker which is not a replica
- * - {@link Errors#NOT_LEADER_FOR_PARTITION} If the broker is not a leader and either the provided leader epoch
+ * - {@link Errors#REPLICA_NOT_AVAILABLE} If the request is received by a broker with version < 2.6 which is not a replica
+ * - {@link Errors#NOT_LEADER_OR_FOLLOWER} If the broker is not a leader or follower and either the provided leader epoch
  *     matches the known leader epoch on the broker or is empty
  * - {@link Errors#FENCED_LEADER_EPOCH} If the epoch is lower than the broker's epoch
  * - {@link Errors#UNKNOWN_LEADER_EPOCH} If the epoch is larger than the broker's epoch
@@ -85,9 +85,12 @@ public class OffsetsForLeaderEpochResponse extends AbstractResponse {
             THROTTLE_TIME_MS,
             TOPICS_V1);
 
+    private static final Schema OFFSET_FOR_LEADER_EPOCH_RESPONSE_V3 = OFFSET_FOR_LEADER_EPOCH_RESPONSE_V2;
+
+
     public static Schema[] schemaVersions() {
         return new Schema[]{OFFSET_FOR_LEADER_EPOCH_RESPONSE_V0, OFFSET_FOR_LEADER_EPOCH_RESPONSE_V1,
-            OFFSET_FOR_LEADER_EPOCH_RESPONSE_V2};
+            OFFSET_FOR_LEADER_EPOCH_RESPONSE_V2, OFFSET_FOR_LEADER_EPOCH_RESPONSE_V3};
     }
 
     private final int throttleTimeMs;
@@ -127,8 +130,9 @@ public class OffsetsForLeaderEpochResponse extends AbstractResponse {
     @Override
     public Map<Errors, Integer> errorCounts() {
         Map<Errors, Integer> errorCounts = new HashMap<>();
-        for (EpochEndOffset response : epochEndOffsetsByPartition.values())
-            updateErrorCounts(errorCounts, response.error());
+        epochEndOffsetsByPartition.values().forEach(response ->
+            updateErrorCounts(errorCounts, response.error())
+        );
         return errorCounts;
     }
 

@@ -42,12 +42,13 @@ private[log] case class TxnIndexSearchResult(abortedTransactions: List[AbortedTx
  * order to find the start of the transactions.
  */
 @nonthreadsafe
-class TransactionIndex(val startOffset: Long, @volatile var file: File) extends Logging {
+class TransactionIndex(val startOffset: Long, @volatile private var _file: File) extends Logging {
+
   // note that the file is not created until we need it
   @volatile private var maybeChannel: Option[FileChannel] = None
   private var lastOffset: Option[Long] = None
 
-  if (file.exists)
+  if (_file.exists)
     openChannel()
 
   def append(abortedTxn: AbortedTxn): Unit = {
@@ -57,10 +58,14 @@ class TransactionIndex(val startOffset: Long, @volatile var file: File) extends 
           s"${abortedTxn.lastOffset} is not greater than current last offset $offset of index ${file.getAbsolutePath}")
     }
     lastOffset = Some(abortedTxn.lastOffset)
-    Utils.writeFully(channel, abortedTxn.buffer.duplicate())
+    Utils.writeFully(channel(), abortedTxn.buffer.duplicate())
   }
 
   def flush(): Unit = maybeChannel.foreach(_.force(true))
+
+  def file: File = _file
+
+  def updateParentDir(parentDir: File): Unit = _file = new File(parentDir, file.getName)
 
   /**
    * Delete this index.
@@ -74,7 +79,7 @@ class TransactionIndex(val startOffset: Long, @volatile var file: File) extends 
     Files.deleteIfExists(file.toPath)
   }
 
-  private def channel: FileChannel = {
+  private def channel(): FileChannel = {
     maybeChannel match {
       case Some(channel) => channel
       case None => openChannel()
@@ -106,7 +111,7 @@ class TransactionIndex(val startOffset: Long, @volatile var file: File) extends 
     try {
       if (file.exists)
         Utils.atomicMoveWithFallback(file.toPath, f.toPath)
-    } finally file = f
+    } finally _file = f
   }
 
   def truncateTo(offset: Long): Unit = {
@@ -114,7 +119,7 @@ class TransactionIndex(val startOffset: Long, @volatile var file: File) extends 
     var newLastOffset: Option[Long] = None
     for ((abortedTxn, position) <- iterator(() => buffer)) {
       if (abortedTxn.lastOffset >= offset) {
-        channel.truncate(position)
+        channel().truncate(position)
         lastOffset = newLastOffset
         return
       }

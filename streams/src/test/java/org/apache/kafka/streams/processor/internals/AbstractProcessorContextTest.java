@@ -21,6 +21,7 @@ import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.processor.Cancellable;
@@ -31,6 +32,7 @@ import org.apache.kafka.streams.processor.TaskId;
 import org.apache.kafka.streams.processor.To;
 import org.apache.kafka.streams.state.RocksDBConfigSetter;
 import org.apache.kafka.streams.state.internals.ThreadCache;
+import org.apache.kafka.streams.state.internals.ThreadCache.DirtyEntryFlushListener;
 import org.apache.kafka.test.MockKeyValueStore;
 import org.junit.Before;
 import org.junit.Test;
@@ -90,13 +92,19 @@ public class AbstractProcessorContextTest {
     }
 
     @Test
+    public void shouldNotThrowNullPointerExceptionOnTopicIfRecordContextTopicIsNull() {
+        context.setRecordContext(new ProcessorRecordContext(0, 0, 0, null, null));
+        assertThat(context.topic(), nullValue());
+    }
+
+    @Test
     public void shouldReturnTopicFromRecordContext() {
         assertThat(context.topic(), equalTo(recordContext.topic()));
     }
 
     @Test
     public void shouldReturnNullIfTopicEqualsNonExistTopic() {
-        context.setRecordContext(new ProcessorRecordContext(0, 0, 0, AbstractProcessorContext.NONEXIST_TOPIC));
+        context.setRecordContext(new ProcessorRecordContext(0, 0, 0, AbstractProcessorContext.NONEXIST_TOPIC, null));
         assertThat(context.topic(), nullValue());
     }
 
@@ -154,7 +162,7 @@ public class AbstractProcessorContextTest {
 
     @Test
     public void shouldReturnNullIfHeadersAreNotSet() {
-        context.setRecordContext(new ProcessorRecordContext(0, 0, 0, AbstractProcessorContext.NONEXIST_TOPIC));
+        context.setRecordContext(new ProcessorRecordContext(0, 0, 0, AbstractProcessorContext.NONEXIST_TOPIC, null));
         assertThat(context.headers(), nullValue());
     }
 
@@ -180,7 +188,7 @@ public class AbstractProcessorContextTest {
     public void appConfigsShouldReturnUnrecognizedValues() {
         assertThat(
             context.appConfigs().get("user.supplied.config"),
-            equalTo("user-suppplied-value"));
+            equalTo("user-supplied-value"));
     }
 
 
@@ -190,11 +198,16 @@ public class AbstractProcessorContextTest {
             config = getStreamsConfig();
             // Value must be a string to test className -> class conversion
             config.put(StreamsConfig.ROCKSDB_CONFIG_SETTER_CLASS_CONFIG, RocksDBConfigSetter.class.getName());
-            config.put("user.supplied.config", "user-suppplied-value");
+            config.put("user.supplied.config", "user-supplied-value");
         }
 
         TestProcessorContext(final MockStreamsMetrics metrics) {
-            super(new TaskId(0, 0), new StreamsConfig(config), metrics, new StateManagerStub(), new ThreadCache(new LogContext("name "), 0, metrics));
+            super(new TaskId(0, 0), new StreamsConfig(config), metrics, new ThreadCache(new LogContext("name "), 0, metrics));
+        }
+
+        @Override
+        protected StateManager stateManager() {
+            return new StateManagerStub();
         }
 
         @Override
@@ -233,5 +246,29 @@ public class AbstractProcessorContextTest {
 
         @Override
         public void commit() {}
+
+        @Override
+        public void logChange(final String storeName,
+                              final Bytes key,
+                              final byte[] value,
+                              final long timestamp) {
+        }
+
+        @Override
+        public void transitionToActive(final StreamTask streamTask, final RecordCollector recordCollector, final ThreadCache newCache) {
+        }
+
+        @Override
+        public void transitionToStandby(final ThreadCache newCache) {
+        }
+
+        @Override
+        public void registerCacheFlushListener(final String namespace, final DirtyEntryFlushListener listener) {
+        }
+
+        @Override
+        public String changelogFor(final String storeName) {
+            return ProcessorStateManager.storeChangelogTopic(applicationId(), storeName);
+        }
     }
 }

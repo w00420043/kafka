@@ -20,7 +20,6 @@ import java.io.File
 import java.util.Optional
 import java.util.concurrent.atomic.AtomicBoolean
 
-import kafka.cluster.Replica
 import kafka.log.{Log, LogManager}
 import kafka.server._
 import kafka.utils.{MockTime, TestUtils}
@@ -57,9 +56,8 @@ class OffsetsForLeaderEpochTest {
     val replicaManager = new ReplicaManager(config, metrics, time, null, null, logManager, new AtomicBoolean(false),
       QuotaFactory.instantiate(config, metrics, time, ""), new BrokerTopicStats,
       new MetadataCache(config.brokerId), new LogDirFailureChannel(config.logDirs.size))
-    val partition = replicaManager.getOrCreatePartition(tp)
-    val leaderReplica = new Replica(config.brokerId, partition.topicPartition, time, 0, Some(mockLog))
-    partition.addReplicaIfNotExists(leaderReplica)
+    val partition = replicaManager.createPartition(tp)
+    partition.setLog(mockLog, isFutureLog = false)
     partition.leaderReplicaIdOpt = Some(config.brokerId)
 
     //When
@@ -79,7 +77,7 @@ class OffsetsForLeaderEpochTest {
     val replicaManager = new ReplicaManager(config, metrics, time, null, null, logManager, new AtomicBoolean(false),
       QuotaFactory.instantiate(config, metrics, time, ""), new BrokerTopicStats,
       new MetadataCache(config.brokerId), new LogDirFailureChannel(config.logDirs.size))
-    replicaManager.getOrCreatePartition(tp)
+    replicaManager.createPartition(tp)
 
     //Given
     val epochRequested: Integer = 5
@@ -89,7 +87,7 @@ class OffsetsForLeaderEpochTest {
     val response = replicaManager.lastOffsetForLeaderEpoch(request)
 
     //Then
-    assertEquals(new EpochEndOffset(Errors.NOT_LEADER_FOR_PARTITION, UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET), response(tp))
+    assertEquals(new EpochEndOffset(Errors.NOT_LEADER_OR_FOLLOWER, UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET), response(tp))
   }
 
   @Test
